@@ -17,7 +17,7 @@ class WhatsAppWebhookController extends Controller
         $token = $request->query('hub_verify_token');
         $challenge = $request->query('hub_challenge');
 
-        if ($mode === 'subscribe' && $token === env('WHATSAPP_VERIFY_TOKEN')) {
+        if ($mode === 'subscribe' && $token === config('app.whatsapp_verify_token')) {
             return response($challenge, 200);
         }
 
@@ -197,9 +197,9 @@ class WhatsAppWebhookController extends Controller
     {
         Log::info('Sending text message');
         try {
-            $whatsappToken = env('WHATSAPP_ACCESS_TOKEN');
-            $whatsappPhoneNumberId = env('WHATSAPP_PHONE_NUMBER_ID');
-            $whatsappGraphVersion = env('WHATSAPP_GRAPH_VERSION');
+            $whatsappToken = config('app.whatsapp_access_token');
+            $whatsappPhoneNumberId = config('app.whatsapp_phone_number_id');
+            $whatsappGraphVersion = config('app.whatsapp_graph_version');
 
             if (! $whatsappToken || ! $whatsappPhoneNumberId) {
                 Log::error('WhatsApp credentials not configured');
