@@ -15,19 +15,6 @@ if [ ! -f ".env" ]; then
     echo "No .env file found. Using environment variables from container."
 fi
 
-# Wait for database to be ready (with timeout)
-echo "Waiting for database to be ready..."
-MAX_TRIES=30
-COUNT=0
-until php artisan db:show 2>/dev/null || [ $COUNT -eq $MAX_TRIES ]; do
-    echo "Database not ready, waiting... ($COUNT/$MAX_TRIES)"
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ $COUNT -eq $MAX_TRIES ]; then
-    echo "Warning: Database may not be ready, proceeding anyway..."
-fi
 
 # Run migrations
 echo "Running migrations..."
