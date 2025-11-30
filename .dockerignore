@@ -1,0 +1,16 @@
+/vendor
+/node_modules
+/public/build
+/public/hot
+/storage/*.key
+.env
+.env.backup
+.env.production
+.git
+.gitignore
+.gitattributes
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+phpunit.xml
+README.md
