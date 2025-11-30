@@ -13,8 +13,6 @@ RUN apk add --no-cache \
     postgresql-dev \
     zip \
     unzip \
-    nginx \
-    supervisor \
     bash
 
 # Install PHP extensions
@@ -23,22 +21,20 @@ RUN docker-php-ext-install pdo_pgsql pgsql mbstring exif pcntl bcmath gd
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Copy existing application directory contents
+# Copy application files
 COPY . /var/www
 
-# Copy existing application directory permissions
+# Set permissions
 RUN chown -R www-data:www-data /var/www \
     && chmod -R 755 /var/www/storage \
     && chmod -R 755 /var/www/bootstrap/cache
 
-# # Copy nginx configuration
-# COPY docker/nginx/default.conf /etc/nginx/sites-available/default
-
-# # Copy supervisor configuration
-# COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+# Make entrypoint executable
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Expose port 8000
 EXPOSE 8000
 
-# Start supervisor
-ENTRYPOINT ["/var/www/scripts/entrypoint.sh"]
+# Use entrypoint script
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
