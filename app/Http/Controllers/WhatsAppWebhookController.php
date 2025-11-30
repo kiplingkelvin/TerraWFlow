@@ -252,7 +252,7 @@ class WhatsAppWebhookController extends Controller
             }
 
         } catch (\Exception $e) {
-            Log::error('Exception sending text message', [
+            Log::channel('stderr')->error('Exception sending text message', [
                 'error' => $e->getMessage(),
                 'to' => $toNumber,
             ]);
