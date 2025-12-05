@@ -8,4 +8,8 @@ return [
     'whatsapp_waba_id' => env('WHATSAPP_WABA_ID', ''),
     'whatsapp_graph_version' => env('WHATSAPP_GRAPH_VERSION', 'v22.0'),
 
+    'private_key' => env('WHATSAPP_PRIVATE_KEY'),
+    'public_key' => env('WHATSAPP_PUBLIC_KEY'),
+    'private_key_passphrase' => env('WHATSAPP_PRIVATE_KEY_PASSPHRASE'),
+
 ];

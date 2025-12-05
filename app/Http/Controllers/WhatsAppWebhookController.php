@@ -2,12 +2,21 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\WhatsAppFlowEncryption;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
 
 class WhatsAppWebhookController extends Controller
 {
+    private $encryption;
+
+    public function __construct(WhatsAppFlowEncryption $encryption)
+    {
+        $this->encryption = $encryption;
+    }
+
     /**
      * Verify the webhook.
      */
@@ -17,7 +26,7 @@ class WhatsAppWebhookController extends Controller
         $token = $request->query('hub_verify_token');
         $challenge = $request->query('hub_challenge');
 
-        if ($mode === 'subscribe' && $token == config('whatsapp.whatsapp_verify_token')) {
+        if ($mode === 'subscribe' && $token === config('whatsapp.whatsapp_verify_token')) {
             return response($challenge, 200);
         }
 
@@ -30,6 +39,7 @@ class WhatsAppWebhookController extends Controller
     public function handle(Request $request)
     {
         try {
+            Log::info('WhatsApp Webhook Request', $request->all());
             // Extract the webhook data
             $entry = $request->input('entry.0');
 
@@ -75,9 +85,9 @@ class WhatsAppWebhookController extends Controller
 
                         $this->sendFlowMessage(
                             $from,
-                            '1537344317588343',
+                            '2933855406810730',
                             'Complete your account setup in just a few quick steps.',
-                            'Start Registration',
+                            'Complete Registration',
                             'guardian-'.uniqid().'-session',
                             [
                                 'screen' => 'GUARDIAN_DETAILS',
@@ -1057,17 +1067,295 @@ class WhatsAppWebhookController extends Controller
      */
     public function data_validation(Request $request)
     {
-        Log::info('WhatsApp Webhook Received:', $request->all());
+        Log::info('WhatsApp Flow Validation Request', $request->all());
 
         try {
-            // You can add custom validation logic here
-        } catch (\Exception $e) {
-            Log::error('Error processing WhatsApp webhook: '.$e->getMessage(), [
-                'exception' => $e,
-                'trace' => $e->getTraceAsString(),
+            // Get encrypted payload
+            $encryptedPayload = $request->all();
+
+            Log::info('Encrypted Request', ['payload' => $encryptedPayload]);
+
+            // Decrypt the request
+            $decrypted = $this->encryption->decryptRequest($encryptedPayload);
+            $flowData = $decrypted['decrypted_data'];
+            $aesKey = $decrypted['aes_key'];
+            $initialVector = $decrypted['initial_vector'];
+
+            Log::info('Decrypted Flow Data', ['flow_data' => $flowData]);
+
+            // Handle different actions
+            $action = $flowData['action'] ?? '';
+            $screen = $flowData['screen'] ?? '';
+            $data = $flowData['data'] ?? [];
+
+            $response = match ($action) {
+                'ping' => $this->handlePing(),
+                'INIT' => $this->handleInit($screen, $data, $flowData),
+                'data_exchange' => $this->handleDataExchange($screen, $data, $flowData),
+                default => ['data' => ['error_message' => 'Unknown action']],
+            };
+
+            Log::info('Response Structure', [
+                'resp' => $response,
             ]);
+
+            // Encrypt and return response
+            $encryptedResponse = $this->encryption->encryptResponse($response, $aesKey, $initialVector);
+
+            return response($encryptedResponse, 200)
+                ->header('Content-Type', 'text/plain');
+
+        } catch (\Exception $e) {
+            Log::error('WhatsApp Flow Error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+                'request' => $request->all(),
+            ]);
+
+            return response()->json(['error' => 'Internal server error'], 500);
+        }
+    }
+
+    private function handlePing(): array
+    {
+        return [
+            'version' => '3.0',
+            'data' => [
+                'status' => 'active',
+            ],
+        ];
+    }
+
+    private function handleInit(string $screen, array $data, array $flowData): array
+    {
+        // Return initial data for the screen
+        return [
+            'version' => '3.0',
+            'screen' => $screen,
+            'data' => [
+                'schools' => [
+                    ['id' => 'school_001', 'title' => 'Nairobi Academy', 'description' => 'Premier school'],
+                    ['id' => 'school_002', 'title' => 'Braeburn School', 'description' => 'British curriculum'],
+                ],
+            ],
+        ];
+    }
+
+    private function handleDataExchange(string $screen, array $data, array $flowData): array
+    {
+        Log::info('Data Exchange', ['screen' => $screen, 'data' => $data]);
+
+        return match ($screen) {
+            'GUARDIAN_DETAILS' => $this->validateGuardianDetails($data, $flowData),
+            'CHILD_DETAILS' => $this->validateChildDetails($data, $flowData),
+            'SCHOOL_SELECTION' => $this->handleSchoolSelection($data, $flowData),
+            default => ['version' => '3.0', 'data' => []],
+        };
+    }
+
+    private function handleSchoolSelection(array $data, array $flowData): array
+    {
+        // This is the terminal screen
+        // Save all data to database here
+
+        Log::info('Registration Complete', [
+            'flow_data' => $flowData,
+            'submitted_data' => $data,
+        ]);
+
+        // TODO: Save to database
+        // $registration = Registration::create([...]);
+
+        // Return success - flow will close
+        return [
+            'version' => '3.0',
+            'data' => [
+                'extension_message_response' => [
+                    'params' => [
+                        'flow_token' => $flowData['flow_token'] ?? '',
+                        'registration_status' => 'success',
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    private function formatErrors($errors): object
+    {
+        $formattedErrors = new \stdClass;
+
+        foreach ($errors->messages() as $field => $messages) {
+            $formattedErrors->{$field} = $messages[0];  // Field name as KEY, message as VALUE
         }
 
-        return response('EVENT_RECEIVED', 200);
+        Log::info('Formatted errors for Flow', ['errors' => $formattedErrors]);
+
+        return $formattedErrors;
+    }
+
+    private function validateGuardianDetails(array $data, array $flowData): array
+    {
+        // Base validation rules
+        $rules = [
+            'first_name' => 'required|string|max:100',
+            'last_name' => 'required|string|max:100',
+            'middle_name' => 'nullable|string|max:100',
+            'email' => 'required|email:rfc,dns|max:255',
+            'phone' => [
+                'required',
+                'regex:/^\+?[1-9]\d{1,14}$/',
+            ],
+            'identification_document' => 'required|in:national_id,passport',
+            'dob' => 'required|date|before:today',
+            'gender' => 'required|in:male,female,other',
+        ];
+
+        // Conditional validation for identification_number
+        $identificationType = $data['identification_document'] ?? null;
+
+        if ($identificationType === 'national_id') {
+            $rules['identification_number'] = [
+                'required',
+                'numeric',
+                'digits:8',
+            ];
+        } elseif ($identificationType === 'passport') {
+            $rules['identification_number'] = [
+                'required',
+                'string',
+                'regex:/^[A-Za-z0-9]{8}$/',
+            ];
+        } else {
+            $rules['identification_number'] = 'required|string|min:8|max:8';
+        }
+
+        $messages = [
+            'email.email' => 'Please enter a valid email address',
+            'phone.regex' => 'Please enter a valid international phone number (e.g., +254712345678)',
+            'identification_number.numeric' => 'National ID must contain only numbers',
+            'identification_number.digits' => 'National ID must be exactly 8 digits',
+            'identification_number.regex' => 'Passport must be exactly 8 alphanumeric characters',
+            'identification_number.min' => 'Identification number must be 8 characters',
+            'identification_number.max' => 'Identification number must be 8 characters',
+            'dob.before' => 'Date of birth must be in the past',
+            'first_name.required' => 'First name is required',
+            'last_name.required' => 'Last name is required',
+            'identification_document.required' => 'Please select an identification document type',
+        ];
+
+        $validator = Validator::make($data, $rules, $messages);
+
+        if ($validator->fails()) {
+            Log::info('Guardian validation failed', ['errors' => $validator->errors()->toArray()]);
+
+            // Convert errors to object format
+            $errorMessages = [];
+            foreach ($validator->errors()->messages() as $field => $fieldMessages) {
+                $errorMessages[$field] = $fieldMessages[0];
+            }
+
+            return [
+                'version' => '3.0',
+                'screen' => 'GUARDIAN_DETAILS',
+                'data' => [
+                    'error_messages' => (object) $errorMessages,
+                    'schools' => $this->getSchoolsData(),
+                ],
+            ];
+        }
+
+        // Validation passed - move to next screen
+        Log::info('Guardian validation passed, moving to CHILD_DETAILS');
+
+        // DON'T include error_messages when there are no errors
+        return [
+            'version' => '3.0',
+            'screen' => 'CHILD_DETAILS',
+            'data' => [
+                'guardian_first_name' => $data['first_name'],
+                'guardian_middle_name' => $data['middle_name'] ?? '',
+                'guardian_last_name' => $data['last_name'],
+                'guardian_email' => $data['email'],
+                'guardian_phone' => $data['phone'],
+                'guardian_identification_document' => $data['identification_document'],
+                'guardian_identification_number' => $data['identification_number'],
+                'guardian_dob' => $data['dob'],
+                'guardian_gender' => $data['gender'],
+                'schools' => $this->getSchoolsData(),
+                // ✅ REMOVED error_messages from success response
+            ],
+        ];
+    }
+
+    private function validateChildDetails(array $data, array $flowData): array
+    {
+        $validator = Validator::make($data, [
+            'child_first_name' => 'required|string|max:100',
+            'child_last_name' => 'required|string|max:100',
+            'child_middle_name' => 'nullable|string|max:100',
+            'child_dob' => 'required|date|before:today',
+            'child_gender' => 'required|in:male,female,other',
+        ], [
+            'child_first_name.required' => 'Child first name is required',
+            'child_last_name.required' => 'Child last name is required',
+            'child_dob.required' => 'Child date of birth is required',
+            'child_dob.before' => 'Date of birth must be in the past',
+        ]);
+
+        if ($validator->fails()) {
+            Log::info('Child validation failed', ['errors' => $validator->errors()->toArray()]);
+
+            // Convert errors to object format
+            $errorMessages = [];
+            foreach ($validator->errors()->messages() as $field => $fieldMessages) {
+                $errorMessages[$field] = $fieldMessages[0];
+            }
+
+            return [
+                'version' => '3.0',
+                'screen' => 'CHILD_DETAILS',
+                'data' => [
+                    'error_messages' => (object) $errorMessages,
+                    // Keep guardian data
+                    'guardian_first_name' => $data['guardian_first_name'] ?? '',
+                    'guardian_middle_name' => $data['guardian_middle_name'] ?? '',
+                    'guardian_last_name' => $data['guardian_last_name'] ?? '',
+                    'guardian_email' => $data['guardian_email'] ?? '',
+                    'guardian_phone' => $data['guardian_phone'] ?? '',
+                    'guardian_identification_document' => $data['guardian_identification_document'] ?? '',
+                    'guardian_identification_number' => $data['guardian_identification_number'] ?? '',
+                    'guardian_dob' => $data['guardian_dob'] ?? '',
+                    'guardian_gender' => $data['guardian_gender'] ?? '',
+                    'schools' => $this->getSchoolsData(),
+                ],
+            ];
+        }
+
+        // Validation passed - move to school selection
+        Log::info('Child validation passed, moving to SCHOOL_SELECTION');
+
+        // DON'T include error_messages when there are no errors
+        return [
+            'version' => '3.0',
+            'screen' => 'SCHOOL_SELECTION',
+            'data' => [
+                'guardian_first_name' => $data['guardian_first_name'],
+                'guardian_middle_name' => $data['guardian_middle_name'] ?? '',
+                'guardian_last_name' => $data['guardian_last_name'],
+                'guardian_email' => $data['guardian_email'],
+                'guardian_phone' => $data['guardian_phone'],
+                'guardian_identification_document' => $data['guardian_identification_document'],
+                'guardian_identification_number' => $data['guardian_identification_number'],
+                'guardian_dob' => $data['guardian_dob'],
+                'guardian_gender' => $data['guardian_gender'],
+                'child_first_name' => $data['child_first_name'],
+                'child_middle_name' => $data['child_middle_name'] ?? '',
+                'child_last_name' => $data['child_last_name'],
+                'child_dob' => $data['child_dob'],
+                'child_gender' => $data['child_gender'],
+                'schools' => $this->getSchoolsData(),
+                // ✅ REMOVED error_messages from success response
+            ],
+        ];
     }
 }
