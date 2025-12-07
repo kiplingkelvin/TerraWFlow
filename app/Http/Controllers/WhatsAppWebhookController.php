@@ -1206,7 +1206,12 @@ class WhatsAppWebhookController extends Controller
                 'regex:/^\+?[1-9]\d{1,14}$/',
             ],
             'identification_document' => 'required|in:national_id,passport',
-            'dob' => 'required|date|before:today',
+            'dob' => [
+                'required',
+                'date',
+                'before:today',
+                'before:'.now()->subYears(18)->format('Y-m-d'),
+            ],
             'gender' => 'required|in:male,female,other',
         ];
 
@@ -1237,7 +1242,7 @@ class WhatsAppWebhookController extends Controller
             'identification_number.regex' => 'Passport must be exactly 8 alphanumeric characters',
             'identification_number.min' => 'Identification number must be 8 characters',
             'identification_number.max' => 'Identification number must be 8 characters',
-            'dob.before' => 'Date of birth must be in the past',
+            'dob.before' => 'Guardian must be at least 18 years old',
             'first_name.required' => 'First name is required',
             'last_name.required' => 'Last name is required',
             'identification_document.required' => 'Please select an identification document type',
@@ -1267,7 +1272,6 @@ class WhatsAppWebhookController extends Controller
         // Validation passed - move to next screen
         Log::info('Guardian validation passed, moving to CHILD_DETAILS');
 
-        // DON'T include error_messages when there are no errors
         return [
             'version' => '3.0',
             'screen' => 'CHILD_DETAILS',
@@ -1282,7 +1286,6 @@ class WhatsAppWebhookController extends Controller
                 'guardian_dob' => $data['dob'],
                 'guardian_gender' => $data['gender'],
                 'schools' => $this->getSchoolsData(),
-                // ✅ REMOVED error_messages from success response
             ],
         ];
     }
