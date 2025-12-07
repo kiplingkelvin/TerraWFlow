@@ -206,7 +206,7 @@ class WhatsAppWebhookController extends Controller
 
         switch ($textBody) {
             case '1':
-                $this->sendTextMessage($from, "Hi {$userName}! Option 1. Coming soon!");
+                $this->sendTextMessage($from, "Hi {$userName}!\n\nThere isnt a status update at the moment.\n\nPlease try again later.");
                 break;
 
             case '2':
