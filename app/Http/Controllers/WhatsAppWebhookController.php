@@ -286,7 +286,7 @@ class WhatsAppWebhookController extends Controller
 
                 // Register guardian first
                 if ($guardian) {
-                    $guardianResult = $this->registerGuardian($guardian);
+                    $guardianResult = $this->registerGuardian($guardian, $from);
 
                     if ($guardianResult['success']) {
                         $registeredGuardian = $guardianResult['data'];
@@ -344,7 +344,7 @@ class WhatsAppWebhookController extends Controller
      * @param  array  $guardianData  Guardian data from flow
      * @return array
      */
-    public function registerGuardian($guardianData)
+    public function registerGuardian($guardianData, $phoneNumber)
     {
         Log::info('Registering guardian in Terrago');
 
@@ -384,7 +384,7 @@ class WhatsAppWebhookController extends Controller
                 'middle_name' => $guardianData['middle_name'] ?? '',
                 'last_name' => $guardianData['last_name'] ?? '',
                 'email' => $guardianData['email'] ?? '',
-                'phone' => $guardianData['phone'] ?? '',
+                'phone' => $phoneNumber ?? '',
                 'identification_document' => strtolower($guardianData['identification_document'] ?? 'national_id'),
                 'identification_number' => $guardianData['identification_number'] ?? '',
                 'dob' => $dob,
@@ -1201,10 +1201,10 @@ class WhatsAppWebhookController extends Controller
             'last_name' => 'required|string|max:100',
             'middle_name' => 'nullable|string|max:100',
             'email' => 'required|email:rfc,dns|max:255',
-            'phone' => [
-                'required',
-                'regex:/^\+?[1-9]\d{1,14}$/',
-            ],
+            // 'phone' => [
+            //     'required',
+            //     'regex:/^\+?[1-9]\d{1,14}$/',
+            // ],
             'identification_document' => 'required|in:national_id,passport',
             'dob' => [
                 'required',
@@ -1236,7 +1236,7 @@ class WhatsAppWebhookController extends Controller
 
         $messages = [
             'email.email' => 'Please enter a valid email address',
-            'phone.regex' => 'Please enter a valid international phone number (e.g., +254712345678)',
+            // 'phone.regex' => 'Please enter a valid international phone number (e.g., +254712345678)',
             'identification_number.numeric' => 'National ID must contain only numbers',
             'identification_number.digits' => 'National ID must be exactly 8 digits',
             'identification_number.regex' => 'Passport must be exactly 8 alphanumeric characters',
@@ -1280,7 +1280,7 @@ class WhatsAppWebhookController extends Controller
                 'guardian_middle_name' => $data['middle_name'] ?? '',
                 'guardian_last_name' => $data['last_name'],
                 'guardian_email' => $data['email'],
-                'guardian_phone' => $data['phone'],
+                // 'guardian_phone' => $data['phone'],
                 'guardian_identification_document' => $data['identification_document'],
                 'guardian_identification_number' => $data['identification_number'],
                 'guardian_dob' => $data['dob'],
@@ -1324,7 +1324,7 @@ class WhatsAppWebhookController extends Controller
                     'guardian_middle_name' => $data['guardian_middle_name'] ?? '',
                     'guardian_last_name' => $data['guardian_last_name'] ?? '',
                     'guardian_email' => $data['guardian_email'] ?? '',
-                    'guardian_phone' => $data['guardian_phone'] ?? '',
+                    // 'guardian_phone' => $data['guardian_phone'] ?? '',
                     'guardian_identification_document' => $data['guardian_identification_document'] ?? '',
                     'guardian_identification_number' => $data['guardian_identification_number'] ?? '',
                     'guardian_dob' => $data['guardian_dob'] ?? '',
@@ -1346,7 +1346,7 @@ class WhatsAppWebhookController extends Controller
                 'guardian_middle_name' => $data['guardian_middle_name'] ?? '',
                 'guardian_last_name' => $data['guardian_last_name'],
                 'guardian_email' => $data['guardian_email'],
-                'guardian_phone' => $data['guardian_phone'],
+                // 'guardian_phone' => $data['guardian_phone'],
                 'guardian_identification_document' => $data['guardian_identification_document'],
                 'guardian_identification_number' => $data['guardian_identification_number'],
                 'guardian_dob' => $data['guardian_dob'],
@@ -1357,7 +1357,6 @@ class WhatsAppWebhookController extends Controller
                 'child_dob' => $data['child_dob'],
                 'child_gender' => $data['child_gender'],
                 'schools' => $this->getSchoolsData(),
-                // ✅ REMOVED error_messages from success response
             ],
         ];
     }
