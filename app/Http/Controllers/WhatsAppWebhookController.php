@@ -209,20 +209,44 @@ class WhatsAppWebhookController extends Controller
 
         switch ($textBody) {
             case '1':
-                $dependants = $this->getDependantsTiedToParent($parent_id);
-                $activities = $this->getDependentActivities($parent_id, $dependants[0]['id']);
-                // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
-                $latestActivity = $this->getLatestActivity($activities);
-                $message = $this->formatSingleActivityMessage($latestActivity);
-                $this->sendTextMessage($from, $message);
-                break;
-
             case '2':
                 $dependants = $this->getDependantsTiedToParent($parent_id);
-                $activities = $this->getDependentActivities($parent_id, $dependants[0]['id']);
-                // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
-                $message = $this->formatActivitiesMessage($activities);
-                $this->sendTextMessage($from, $message);
+
+                if (empty($dependants)) {
+                    $this->sendTextMessage($from, 'No dependants found linked to your account.');
+                    break;
+                }
+
+                if (count($dependants) > 1) {
+                    $sections = [
+                        [
+                            'title' => 'Select Child',
+                            'rows' => [],
+                        ],
+                    ];
+
+                    foreach ($dependants as $dependant) {
+                        $name = trim("{$dependant['first_name']} {$dependant['last_name']}");
+                        // Ensure title is not too long (max 24 chars for list row title)
+                        $title = substr($name, 0, 23);
+                        $sections[0]['rows'][] = [
+                            'id' => $dependant['id'].'|'.$textBody,
+                            'title' => $title,
+                            'description' => 'Select to view details',
+                        ];
+                    }
+
+                    $this->sendInteractiveListMessage(
+                        $from,
+                        'Select Child',
+                        'Please select a child to view details for.',
+                        'Powered by terrasofthq.com',
+                        'View',
+                        $sections
+                    );
+                } else {
+                    $this->processChildOption($from, $parent_id, $dependants[0]['id'], $textBody);
+                }
                 break;
 
             case '3':
@@ -350,6 +374,24 @@ class WhatsAppWebhookController extends Controller
                 }
                 break;
 
+            case 'list_reply':
+                $list_reply = $interactive['list_reply'];
+                $id = $list_reply['id']; // "child_id|option"
+
+                $parts = explode('|', $id);
+                if (count($parts) == 2) {
+                    $childId = $parts[0];
+                    $option = $parts[1];
+
+                    // Get parent ID
+                    $userCheck = $this->getTerragoUserByPhone($from);
+                    if ($userCheck['found']) {
+                        $parentId = $userCheck['data']['id'];
+                        $this->processChildOption($from, $parentId, $childId, $option);
+                    }
+                }
+                break;
+
             default:
                 Log::warning('Unknown interactive type: '.$interactive_type);
                 break;
@@ -472,20 +514,16 @@ class WhatsAppWebhookController extends Controller
 
         try {
             // Get access token
-            $accessToken = cache()->get('terrago_access_token');
+            $tokenData = $this->getTerragoAccessToken();
 
-            if (! $accessToken) {
-                $tokenData = $this->getTerragoAccessToken();
-
-                if (! $tokenData) {
-                    return [
-                        'success' => false,
-                        'error' => 'Failed to get access token',
-                    ];
-                }
-
-                $accessToken = $tokenData['access_token'];
+            if (! $tokenData) {
+                return [
+                    'success' => false,
+                    'error' => 'Failed to get access token',
+                ];
             }
+
+            $accessToken = $tokenData['access_token'];
 
             $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
 
@@ -554,13 +592,25 @@ class WhatsAppWebhookController extends Controller
     /**
      * Get access token from Terrago API
      *
+     * @param  bool  $forceRefresh  Force getting a new token instead of using cached one
      * @return array|null Returns the token data or null on failure
      */
-    public function getTerragoAccessToken()
+    public function getTerragoAccessToken($forceRefresh = false)
     {
-        Log::info('Getting Terrago access token');
+        Log::info('Getting Terrago access token', ['force_refresh' => $forceRefresh]);
 
         try {
+            // Check cache first if not forcing refresh
+            if (! $forceRefresh && cache()->has('terrago_access_token')) {
+                Log::info('Returning cached Terrago access token');
+
+                return [
+                    'access_token' => cache()->get('terrago_access_token'),
+                    'expires_in' => cache()->get('terrago_token_expires_in', 3600),
+                    'token_type' => 'Bearer',
+                ];
+            }
+
             $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
             $terragosEmail = config('terrago.email');
             $terragosPassword = config('terrago.password');
@@ -590,6 +640,7 @@ class WhatsAppWebhookController extends Controller
                 // Cache the token for 55 minutes (expires in 60 minutes)
                 cache()->put('terrago_access_token', $data['data']['access_token'], now()->addMinutes(55));
                 cache()->put('terrago_token_expires_at', now()->addSeconds($data['data']['expires_in'] ?? 3600), now()->addMinutes(55));
+                cache()->put('terrago_token_expires_in', $data['data']['expires_in'] ?? 3600, now()->addMinutes(55));
 
                 return $data['data'];
             } else {
@@ -623,25 +674,20 @@ class WhatsAppWebhookController extends Controller
         Log::info('Getting Terrago user by phone', ['phone' => $phoneNumber]);
 
         try {
-            // Get access token from cache or fetch new one
-            $accessToken = cache()->get('terrago_access_token');
+            // Get access token (will handle caching internally)
+            $tokenData = $this->getTerragoAccessToken($forceRefreshToken);
 
-            if (! $accessToken || $forceRefreshToken) {
-                Log::info('Access token not in cache or force refresh, getting new token');
-                $tokenData = $this->getTerragoAccessToken();
+            if (! $tokenData) {
+                Log::error('Failed to get access token');
 
-                if (! $tokenData) {
-                    Log::error('Failed to get access token');
-
-                    return [
-                        'found' => false,
-                        'error' => 'Failed to get access token',
-                        'data' => null,
-                    ];
-                }
-
-                $accessToken = $tokenData['access_token'];
+                return [
+                    'found' => false,
+                    'error' => 'Failed to get access token',
+                    'data' => null,
+                ];
             }
+
+            $accessToken = $tokenData['access_token'];
 
             $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
 
@@ -734,19 +780,15 @@ class WhatsAppWebhookController extends Controller
             }
 
             // Get access token
-            $accessToken = cache()->get('terrago_access_token');
+            $tokenData = $this->getTerragoAccessToken();
 
-            if (! $accessToken) {
-                $tokenData = $this->getTerragoAccessToken();
+            if (! $tokenData) {
+                Log::error('Failed to get access token');
 
-                if (! $tokenData) {
-                    Log::error('Failed to get access token');
-
-                    return null;
-                }
-
-                $accessToken = $tokenData['access_token'];
+                return null;
             }
+
+            $accessToken = $tokenData['access_token'];
 
             $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
 
@@ -1363,6 +1405,119 @@ class WhatsAppWebhookController extends Controller
 
         } catch (\Exception $e) {
             Log::channel('stderr')->error('Exception sending text message', [
+                'error' => $e->getMessage(),
+                'to' => $toNumber,
+            ]);
+
+            return [
+                'success' => false,
+                'error' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Process the selected option for a specific child
+     */
+    private function processChildOption($from, $parentId, $childId, $option)
+    {
+        switch ($option) {
+            case '1':
+                $activities = $this->getDependentActivities($parentId, $childId);
+                $latestActivity = $this->getLatestActivity($activities);
+                $message = $this->formatSingleActivityMessage($latestActivity);
+                $this->sendTextMessage($from, $message);
+                break;
+
+            case '2':
+                $activities = $this->getDependentActivities($parentId, $childId);
+                $message = $this->formatActivitiesMessage($activities);
+                $this->sendTextMessage($from, $message);
+                break;
+        }
+    }
+
+    /**
+     * Send an interactive list message via WhatsApp
+     *
+     * @param  string  $toNumber  The recipient's phone number
+     * @param  string  $headerText  The header text
+     * @param  string  $bodyText  The body text
+     * @param  string  $footerText  The footer text
+     * @param  string  $buttonText  The button text
+     * @param  array  $sections  The sections and rows for the list
+     * @return array
+     */
+    public function sendInteractiveListMessage($toNumber, $headerText, $bodyText, $footerText, $buttonText, $sections)
+    {
+        Log::info('Sending interactive list message');
+
+        try {
+            $whatsappToken = config('whatsapp.whatsapp_access_token');
+            $whatsappPhoneNumberId = config('whatsapp.whatsapp_phone_number_id');
+            $whatsappGraphVersion = config('whatsapp.whatsapp_graph_version');
+
+            if (! $whatsappToken || ! $whatsappPhoneNumberId) {
+                Log::error('WhatsApp credentials not configured');
+
+                return [
+                    'success' => false,
+                    'error' => 'WhatsApp credentials not configured',
+                ];
+            }
+
+            $payload = [
+                'messaging_product' => 'whatsapp',
+                'recipient_type' => 'individual',
+                'to' => $toNumber,
+                'type' => 'interactive',
+                'interactive' => [
+                    'type' => 'list',
+                    'header' => [
+                        'type' => 'text',
+                        'text' => $headerText,
+                    ],
+                    'body' => [
+                        'text' => $bodyText,
+                    ],
+                    'footer' => [
+                        'text' => $footerText,
+                    ],
+                    'action' => [
+                        'button' => $buttonText,
+                        'sections' => $sections,
+                    ],
+                ],
+            ];
+
+            $response = Http::withToken($whatsappToken)
+                ->post("https://graph.facebook.com/{$whatsappGraphVersion}/{$whatsappPhoneNumberId}/messages", $payload);
+
+            if ($response->successful()) {
+                Log::info('List message sent successfully', [
+                    'to' => $toNumber,
+                    'message_id' => $response->json()['messages'][0]['id'] ?? null,
+                ]);
+
+                return [
+                    'success' => true,
+                    'data' => $response->json(),
+                ];
+            } else {
+                Log::error('Failed to send list message', [
+                    'to' => $toNumber,
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                return [
+                    'success' => false,
+                    'error' => $response->json(),
+                ];
+            }
+
+        } catch (\Exception $e) {
+            Log::channel('stderr')->error('Exception sending list message', [
                 'error' => $e->getMessage(),
                 'to' => $toNumber,
             ]);
