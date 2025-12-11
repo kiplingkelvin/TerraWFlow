@@ -131,6 +131,8 @@ class WhatsAppWebhookController extends Controller
             $menuMessage .= "4. Live Journey Link\n";
             $menuMessage .= "5. Authorize a Pickup\n";
             $menuMessage .= "6. Manage My Account\n";
+            $menuMessage .= "7. Add Dependant\n";
+            $menuMessage .= "8. Add Guardian\n";
 
             $this->sendTextMessage($from, $menuMessage);
 
@@ -206,11 +208,18 @@ class WhatsAppWebhookController extends Controller
 
         switch ($textBody) {
             case '1':
-                $this->sendTextMessage($from, "Hi {$userName}!\n\nThere isnt a status update at the moment.\n\nPlease try again later.");
+                $activities = $this->getDependentActivities($parent_id, $dependant_id);
+                // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
+                $latestActivity = $this->getLatestActivity($activities);
+                $message = $this->formatSingleActivityMessage($latestActivity);
+                $this->sendTextMessage($from, $message);
                 break;
 
             case '2':
-                $this->sendTextMessage($from, "Last 3 activities for your child:\n\n- Boarded Bus at Junction Amboses Rd (Today, 8:15 AM)\n- Arrived at Kiota School (Today, 8:45 AM)\n- Departed for Home (Today, 3:10 PM)");
+                $activities = $this->getDependentActivities($parent_id, $dependant_id);
+                // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
+                $message = $this->formatActivitiesMessage($activities);
+                $this->sendTextMessage($from, $message);
                 break;
 
             case '3':
@@ -237,6 +246,12 @@ class WhatsAppWebhookController extends Controller
                 $accountInfo .= 'Account Status: '.($user['is_active'] ? 'Active ✅' : 'Inactive ❌');
 
                 $this->sendTextMessage($from, $accountInfo);
+                break;
+            case '6':
+                $this->sendTextMessage($from, 'Option 6. Coming soon!');
+                break;
+            case '7':
+                $this->sendTextMessage($from, 'Option 7. Coming soon!');
                 break;
 
             default:
@@ -843,6 +858,250 @@ class WhatsAppWebhookController extends Controller
 
             return [];
         }
+    }
+
+    public function getDependentActivities($parent_id, $dependant_id)
+    {
+        Log::info('Getting Terrago Dependant Activities');
+
+        try {
+
+            $tokenData = $this->getTerragoAccessToken();
+
+            if (! $tokenData) {
+                Log::error('Failed to get access token');
+
+                return null;
+            }
+
+            $accessToken = $tokenData['access_token'];
+
+            $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
+
+            $payload = [
+                'dependant_id' => $dependant_id,
+                'parent_id' => $parent_id,
+                'per_page' => 10,
+                'page' => 1,
+                'date_range' => ['2025-10-14 08:03:21', '2025-12-23 17:03:21'],
+            ];
+
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Authorization' => "Bearer {$accessToken}",
+            ])->get("{$terragosApiUrl}/api/utility/access-logs", $payload);
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                Log::info('Dependant activities retrieved successfully', [
+                    'total_activities' => count($data['data'] ?? []),
+                ]);
+
+                return $data['data'];
+            } else {
+                Log::error('Failed to get parent guardians', [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                return null;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception getting parent guardians', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return null;
+        }
+    }
+
+    public function getGuardiansTiedToParent($parent_id)
+    {
+        Log::info('Getting Terrago roles');
+
+        try {
+
+            $tokenData = $this->getTerragoAccessToken();
+
+            if (! $tokenData) {
+                Log::error('Failed to get access token');
+
+                return null;
+            }
+
+            $accessToken = $tokenData['access_token'];
+
+            $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
+
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Authorization' => "Bearer {$accessToken}",
+            ])->get("{$terragosApiUrl}/api/guardians?parent_id={$parent_id}");
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                Log::info('Parent guardians retrieved successfully', [
+                    'total_guardians' => count($data['data'] ?? []),
+                ]);
+
+                return $data['data'];
+            } else {
+                Log::error('Failed to get parent guardians', [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                return null;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception getting parent guardians', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return null;
+        }
+    }
+
+    /**
+     * Get the latest activity from the activities array
+     */
+    private function getLatestActivity(array $activities)
+    {
+        if (empty($activities)) {
+            return null;
+        }
+
+        // Sort by created_at timestamp to get the most recent
+        usort($activities, function ($a, $b) {
+            $dateA = \Carbon\Carbon::parse($a['created_at']);
+            $dateB = \Carbon\Carbon::parse($b['created_at']);
+
+            return $dateB <=> $dateA; // Descending order (newest first)
+        });
+
+        return $activities[0];
+    }
+
+    /**
+     * Format a single activity message with emojis
+     */
+    private function formatSingleActivityMessage(?array $activity): string
+    {
+        if (! $activity) {
+            return '❌ No recent activity found for your child.';
+        }
+
+        // Determine the action and emoji based on status
+        if ($activity['status'] === 'Checked In') {
+            $emoji = '✅';
+            $action = 'Checked In at';
+        } else {
+            $emoji = '🚪';
+            $action = 'Checked Out from';
+        }
+
+        // Get zone name
+        $zone = $activity['zone'];
+
+        // Use the most relevant timestamp
+        $timestamp = $activity['status'] === 'Checked In'
+            ? $activity['checkin_at']
+            : ($activity['checkout_at'] ?? $activity['checkin_at']);
+
+        // Format the timestamp
+        $formattedTime = $this->formatTimestamp($timestamp);
+
+        // Get child's name
+        $childName = $activity['dependant']['name'];
+
+        return "👤 Latest activity for {$childName}:\n\n{$emoji} {$action} {$zone} ({$formattedTime})";
+    }
+
+    /**
+     * Format multiple activities message with emojis
+     */
+    private function formatActivitiesMessage(array $activities): string
+    {
+        if (empty($activities)) {
+            return '❌ No activities found at the moment.';
+        }
+
+        // Sort activities by created_at (newest first)
+        usort($activities, function ($a, $b) {
+            $dateA = \Carbon\Carbon::parse($a['created_at']);
+            $dateB = \Carbon\Carbon::parse($b['created_at']);
+
+            return $dateB <=> $dateA;
+        });
+
+        $formattedActivities = [];
+
+        $childName = '';
+        foreach ($activities as $activity) {
+            // Determine the action and emoji based on status
+            if ($activity['status'] === 'Checked In') {
+                $emoji = '✅';
+                $action = 'Checked In at';
+            } else {
+                $emoji = '🚪';
+                $action = 'Checked Out from';
+            }
+
+            // Get zone name
+            $zone = $activity['zone'];
+
+            // Use the most relevant timestamp
+            $timestamp = $activity['status'] === 'Checked In'
+                ? $activity['checkin_at']
+                : ($activity['checkout_at'] ?? $activity['checkin_at']);
+
+            // Format the timestamp to be more readable
+            $formattedTime = $this->formatTimestamp($timestamp);
+
+            $childName = $activity['dependant']['name'];
+
+            $formattedActivities[] = "{$emoji} {$action} {$zone} ({$formattedTime})";
+        }
+
+        $count = count($activities);
+        $header = $count === 1
+            ? '📋 Last activity for your child:'
+            : "📋 Last {$count} activities for {$childName}";
+
+        return $header."\n\n".implode("\n\n", $formattedActivities);
+    }
+
+    /**
+     * Format timestamp helper with relative time emojis
+     */
+    private function formatTimestamp(string $timestamp): string
+    {
+        $date = \Carbon\Carbon::parse($timestamp);
+        $now = \Carbon\Carbon::now();
+
+        // Check if it's today
+        if ($date->isToday()) {
+            return 'Today, '.$date->format('g:i A');
+        }
+
+        // Check if it's yesterday
+        if ($date->isYesterday()) {
+            return 'Yesterday, '.$date->format('g:i A');
+        }
+
+        // If within the last week
+        if ($date->diffInDays($now) < 7) {
+            return $date->format('l, g:i A'); // e.g., "Monday, 3:59 PM"
+        }
+
+        // Otherwise show full date
+        return $date->format('M j, g:i A'); // e.g., "Oct 14, 3:59 PM"
     }
 
     /**
