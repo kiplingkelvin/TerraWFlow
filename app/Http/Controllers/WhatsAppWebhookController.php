@@ -39,7 +39,6 @@ class WhatsAppWebhookController extends Controller
     public function handle(Request $request)
     {
         try {
-            Log::info('WhatsApp Webhook Request', $request->all());
             // Extract the webhook data
             $entry = $request->input('entry.0');
 
@@ -111,12 +110,6 @@ class WhatsAppWebhookController extends Controller
                     break;
 
                 case 'interactive':
-                    $userCheck = $this->getTerragoUserByPhone($from);
-
-                    if ($userCheck['found']) {
-                        return response('EVENT_RECEIVED', 200);
-                    }
-
                     $this->handleInteractiveMessage($messages, $from);
                     break;
 
@@ -218,6 +211,11 @@ class WhatsAppWebhookController extends Controller
                 }
 
                 if (count($dependants) > 1) {
+                    // Set different body text based on option
+                    $bodyText = $textBody === '1'
+                        ? 'Please select a child to view their latest activity.'
+                        : 'Please select a child to view their last 3 activities.';
+
                     $sections = [
                         [
                             'title' => 'Select Child',
@@ -229,19 +227,38 @@ class WhatsAppWebhookController extends Controller
                         $name = trim("{$dependant['first_name']} {$dependant['last_name']}");
                         // Ensure title is not too long (max 24 chars for list row title)
                         $title = substr($name, 0, 23);
-                        $sections[0]['rows'][] = [
+
+                        // Get grade from metadata
+                        $grade = null;
+                        if (isset($dependant['metadata'])) {
+                            // If metadata is a JSON string, decode it
+                            $metadata = is_string($dependant['metadata'])
+                                ? json_decode($dependant['metadata'], true)
+                                : $dependant['metadata'];  // ← Will use this for your API response
+
+                            $grade = $metadata['grade'] ?? null;  // ← Gets the grade value
+                        }
+
+                        // Build row array
+                        $row = [
                             'id' => $dependant['id'].'|'.$textBody,
                             'title' => $title,
-                            'description' => 'Select to view details',
                         ];
+
+                        // Only add description if grade exists
+                        if ($grade) {
+                            $row['description'] = "Grade: {$grade}";
+                        }
+
+                        $sections[0]['rows'][] = $row;
                     }
 
                     $this->sendInteractiveListMessage(
                         $from,
                         'Select Child',
-                        'Please select a child to view details for.',
+                        $bodyText,
                         'Powered by terrasofthq.com',
-                        'View',
+                        'Select Child',
                         $sections
                     );
                 } else {
@@ -466,11 +483,6 @@ class WhatsAppWebhookController extends Controller
             if ($response->successful()) {
                 $data = $response->json();
 
-                Log::info('Guardian registered successfully', [
-                    'guardian_id' => $data['data']['id'] ?? null,
-                    'message' => $data['message'] ?? null,
-                ]);
-
                 return [
                     'success' => true,
                     'data' => $data['data'],
@@ -597,13 +609,9 @@ class WhatsAppWebhookController extends Controller
      */
     public function getTerragoAccessToken($forceRefresh = false)
     {
-        Log::info('Getting Terrago access token', ['force_refresh' => $forceRefresh]);
-
         try {
             // Check cache first if not forcing refresh
             if (! $forceRefresh && cache()->has('terrago_access_token')) {
-                Log::info('Returning cached Terrago access token');
-
                 return [
                     'access_token' => cache()->get('terrago_access_token'),
                     'expires_in' => cache()->get('terrago_token_expires_in', 3600),
@@ -631,11 +639,6 @@ class WhatsAppWebhookController extends Controller
 
             if ($response->successful()) {
                 $data = $response->json();
-
-                Log::info('Terrago access token retrieved successfully', [
-                    'token_type' => $data['data']['token_type'] ?? null,
-                    'expires_in' => $data['data']['expires_in'] ?? null,
-                ]);
 
                 // Cache the token for 55 minutes (expires in 60 minutes)
                 cache()->put('terrago_access_token', $data['data']['access_token'], now()->addMinutes(55));
@@ -678,8 +681,6 @@ class WhatsAppWebhookController extends Controller
             $tokenData = $this->getTerragoAccessToken($forceRefreshToken);
 
             if (! $tokenData) {
-                Log::error('Failed to get access token');
-
                 return [
                     'found' => false,
                     'error' => 'Failed to get access token',
@@ -700,12 +701,6 @@ class WhatsAppWebhookController extends Controller
                 // User found
                 $responseData = $response->json();
 
-                Log::info('Terrago user found', [
-                    'phone' => $phoneNumber,
-                    'user_id' => $responseData['data']['id'] ?? null,
-                    'name' => ($responseData['data']['first_name'] ?? '').' '.($responseData['data']['last_name'] ?? ''),
-                ]);
-
                 return [
                     'found' => true,
                     'status' => $responseData['status'],
@@ -714,8 +709,6 @@ class WhatsAppWebhookController extends Controller
                 ];
 
             } elseif ($response->status() === 404) {
-                // User not found
-                Log::info('Terrago user not found', ['phone' => $phoneNumber]);
 
                 return [
                     'found' => false,
@@ -725,9 +718,6 @@ class WhatsAppWebhookController extends Controller
                 ];
 
             } elseif ($response->status() === 401 && ! $forceRefreshToken) {
-                // Token expired, try once more with fresh token
-                Log::warning('Token expired, retrying with fresh token');
-
                 return $this->getTerragoUserByPhone($phoneNumber, true);
 
             } else {
@@ -769,13 +759,9 @@ class WhatsAppWebhookController extends Controller
      */
     public function getTerragoRoles($forceRefresh = false)
     {
-        Log::info('Getting Terrago roles');
-
         try {
             // Check cache first
             if (! $forceRefresh && cache()->has('terrago_roles')) {
-                Log::info('Returning cached roles');
-
                 return cache()->get('terrago_roles');
             }
 
@@ -799,11 +785,6 @@ class WhatsAppWebhookController extends Controller
 
             if ($response->successful()) {
                 $data = $response->json();
-
-                Log::info('Terrago roles retrieved successfully', [
-                    'total_roles' => count($data['data'] ?? []),
-                ]);
-
                 // Cache roles for 24 hours (they don't change often)
                 cache()->put('terrago_roles', $data['data'], now()->addHours(24));
 
@@ -835,29 +816,18 @@ class WhatsAppWebhookController extends Controller
      */
     public function getTerragoRoleIdByName($roleName)
     {
-        Log::info('Getting role ID by name', ['role_name' => $roleName]);
-
         try {
             $roles = $this->getTerragoRoles();
 
             if (! $roles) {
-                Log::error('No roles data available');
-
                 return null;
             }
 
             foreach ($roles as $role) {
                 if (strcasecmp($role['name'], $roleName) === 0) {
-                    Log::info('Role found', [
-                        'role_name' => $roleName,
-                        'role_id' => $role['id'],
-                    ]);
-
                     return $role['id'];
                 }
             }
-
-            Log::warning('Role not found', ['role_name' => $roleName]);
 
             return null;
 
@@ -878,7 +848,6 @@ class WhatsAppWebhookController extends Controller
      */
     public function getTerragoRoleMapping()
     {
-        Log::info('Getting Terrago role mapping');
 
         try {
             $roles = $this->getTerragoRoles();
@@ -891,8 +860,6 @@ class WhatsAppWebhookController extends Controller
             foreach ($roles as $role) {
                 $mapping[$role['name']] = $role['id'];
             }
-
-            Log::info('Role mapping created', ['roles' => array_keys($mapping)]);
 
             return $mapping;
 
@@ -938,10 +905,6 @@ class WhatsAppWebhookController extends Controller
 
             if ($response->successful()) {
                 $data = $response->json();
-
-                Log::info('Dependant activities retrieved successfully', [
-                    'total_activities' => count($data['data'] ?? []),
-                ]);
 
                 return $data['data'];
             } else {
@@ -1421,6 +1384,12 @@ class WhatsAppWebhookController extends Controller
      */
     private function processChildOption($from, $parentId, $childId, $option)
     {
+        Log::info('Processing child option', [
+            'from' => $from,
+            'parent_id' => $parentId,
+            'child_id' => $childId,
+            'option' => $option,
+        ]);
         switch ($option) {
             case '1':
                 $activities = $this->getDependentActivities($parentId, $childId);
