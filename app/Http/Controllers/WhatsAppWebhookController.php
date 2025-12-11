@@ -295,7 +295,37 @@ class WhatsAppWebhookController extends Controller
                 $this->sendTextMessage($from, 'Option 6. Coming soon!');
                 break;
             case '7':
-                $this->sendTextMessage($from, 'Option 7. Coming soon!');
+                // Send Add Dependant flow
+                $this->sendTextMessage($from, "Let's add a new child to your account.");
+
+                $this->sendFlowMessage(
+                    $from,
+                    '2040927340007260', // Dependant/Child flow ID
+                    'Please fill in your child\'s details.',
+                    'Add Child',
+                    'child-'.uniqid().'-session',
+                    [],
+                    'Add Dependant',
+                    'Powered by terrasofthq.com',
+                    'navigate'
+                );
+                break;
+
+            case '8':
+                // Send Add Guardian flow
+                $this->sendTextMessage($from, "Let's add a new guardian to your account.");
+
+                $this->sendFlowMessage(
+                    $from,
+                    '677901351920897', // Guardian flow ID
+                    'Please fill in the guardian\'s details.',
+                    'Add Guardian',
+                    'guardian-'.uniqid().'-session',
+                    [],
+                    'Add Guardian',
+                    'Powered by terrasofthq.com',
+                    'navigate'
+                );
                 break;
 
             default:
@@ -327,66 +357,74 @@ class WhatsAppWebhookController extends Controller
                     break;
                 }
 
-                // Extract data
-                $guardian = $response_data['guardian'] ?? null;
-                $child = $response_data['child'] ?? null;
-                $school = $response_data['school'] ?? null;
+                // Extract flow_token to determine which flow was submitted
                 $flow_token = $response_data['flow_token'] ?? null;
 
-                // Log the data
                 Log::info('Flow Response Received', [
                     'from' => $from,
                     'flow_name' => $name,
                     'flow_token' => $flow_token,
-                    'guardian' => $guardian,
-                    'child' => $child,
-                    'school' => $school,
+                    'response_data' => $response_data,
                 ]);
 
-                // Register guardian first
-                if ($guardian) {
-                    $guardianResult = $this->registerGuardian($guardian, $from);
+                // Determine flow type based on flow_token prefix
+                if ($flow_token && str_starts_with($flow_token, 'guardian-')) {
+                    // Handle Guardian flow response
+                    $this->handleGuardianFlowResponse($response_data, $from);
+                } elseif ($flow_token && str_starts_with($flow_token, 'child-')) {
+                    // Handle Dependant/Child flow response
+                    $this->handleDependantFlowResponse($response_data, $from);
+                } else {
+                    // Handle registration flow (existing logic)
+                    $guardian = $response_data['guardian'] ?? null;
+                    $child = $response_data['child'] ?? null;
+                    $school = $response_data['school'] ?? null;
 
-                    if ($guardianResult['success']) {
-                        $registeredGuardian = $guardianResult['data'];
-                        $guardianId = $registeredGuardian['id'];
+                    // Register guardian first
+                    if ($guardian) {
+                        $guardianResult = $this->registerGuardian($guardian, $from);
 
-                        Log::info('Guardian registered successfully', [
-                            'guardian_id' => $guardianId,
-                            'name' => "{$registeredGuardian['first_name']} {$registeredGuardian['last_name']}",
-                        ]);
+                        if ($guardianResult['success']) {
+                            $registeredGuardian = $guardianResult['data'];
+                            $guardianId = $registeredGuardian['id'];
 
-                        // Register child/dependant
-                        if ($child) {
-                            $childResult = $this->registerDependant($child, $guardianId);
+                            Log::info('Guardian registered successfully', [
+                                'guardian_id' => $guardianId,
+                                'name' => "{$registeredGuardian['first_name']} {$registeredGuardian['last_name']}",
+                            ]);
 
-                            if ($childResult['success']) {
-                                $registeredChild = $childResult['data'];
+                            // Register child/dependant
+                            if ($child) {
+                                $childResult = $this->registerDependant($child, $guardianId);
 
-                                Log::info('Child registered successfully', [
-                                    'child_id' => $registeredChild['id'],
-                                    'name' => trim("{$registeredChild['first_name']} {$registeredChild['middle_name']} {$registeredChild['last_name']}"),
-                                ]);
+                                if ($childResult['success']) {
+                                    $registeredChild = $childResult['data'];
 
-                                $childName = trim("{$registeredChild['first_name']} {$registeredChild['middle_name']} {$registeredChild['last_name']}");
+                                    Log::info('Child registered successfully', [
+                                        'child_id' => $registeredChild['id'],
+                                        'name' => trim("{$registeredChild['first_name']} {$registeredChild['middle_name']} {$registeredChild['last_name']}"),
+                                    ]);
+
+                                    $childName = trim("{$registeredChild['first_name']} {$registeredChild['middle_name']} {$registeredChild['last_name']}");
+                                    $message = "🎉 Welcome aboard, {$registeredGuardian['first_name']}! 🎉\n\n";
+                                    $message .= "Your Terra Go account is all set up for {$childName}. You're now ready to receive real-time updates and have peace of mind! 🚌✨";
+
+                                    $this->sendTextMessage($from, $message);
+                                } else {
+                                    Log::error('Failed to register child', ['error' => $childResult['error']]);
+                                    $this->sendTextMessage($from, 'Your account was created, but there was an issue registering your child. Please contact support.');
+                                }
+                            } else {
+                                // Guardian registered but no child data
                                 $message = "🎉 Welcome aboard, {$registeredGuardian['first_name']}! 🎉\n\n";
-                                $message .= "Your Terra Go account is all set up for {$childName}. You're now ready to receive real-time updates and have peace of mind! 🚌✨";
+                                $message .= "Your Terra Go account is all set up. You're now ready to receive real-time updates! 🚌✨";
 
                                 $this->sendTextMessage($from, $message);
-                            } else {
-                                Log::error('Failed to register child', ['error' => $childResult['error']]);
-                                $this->sendTextMessage($from, 'Your account was created, but there was an issue registering your child. Please contact support.');
                             }
                         } else {
-                            // Guardian registered but no child data
-                            $message = "🎉 Welcome aboard, {$registeredGuardian['first_name']}! 🎉\n\n";
-                            $message .= "Your Terra Go account is all set up. You're now ready to receive real-time updates! 🚌✨";
-
-                            $this->sendTextMessage($from, $message);
+                            Log::error('Failed to register guardian', ['error' => $guardianResult['error']]);
+                            $this->sendTextMessage($from, 'Sorry, there was an issue creating your account. Please try again or contact support.');
                         }
-                    } else {
-                        Log::error('Failed to register guardian', ['error' => $guardianResult['error']]);
-                        $this->sendTextMessage($from, 'Sorry, there was an issue creating your account. Please try again or contact support.');
                     }
                 }
                 break;
@@ -598,6 +636,201 @@ class WhatsAppWebhookController extends Controller
                 'success' => false,
                 'error' => $e->getMessage(),
             ];
+        }
+    }
+
+    /**
+     * Handle Guardian flow response
+     *
+     * @param  array  $response_data  Flow response data
+     * @param  string  $from  Phone number of the user
+     * @return void
+     */
+    private function handleGuardianFlowResponse($response_data, $from)
+    {
+        Log::info('Handling Guardian Flow Response', ['data' => $response_data]);
+
+        try {
+            // Get the current user to extract parent_id
+            $userCheck = $this->getTerragoUserByPhone($from);
+
+            if (! $userCheck['found']) {
+                Log::error('User not found for guardian flow', ['phone' => $from]);
+                $this->sendTextMessage($from, 'Sorry, we couldn\'t find your account. Please contact support.');
+
+                return;
+            }
+
+            $user = $userCheck['data'];
+            $parent_id = $user['id'];
+
+            // Get access token
+            $tokenData = $this->getTerragoAccessToken();
+
+            if (! $tokenData) {
+                Log::error('Failed to get access token for guardian creation');
+                $this->sendTextMessage($from, 'Sorry, there was an issue connecting to our system. Please try again.');
+
+                return;
+            }
+
+            $accessToken = $tokenData['access_token'];
+            $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
+
+            // Format the date from YYYY-MM-DD to DD-MM-YYYY
+            $dob = $response_data['dob'] ?? null;
+            if ($dob) {
+                $dob = \Carbon\Carbon::parse($dob)->format('d-m-Y');
+            }
+
+            // Transform flow data to API format
+            $payload = [
+                'first_name' => $response_data['first_name'] ?? '',
+                'middle_name' => $response_data['middle_name'] ?? '',
+                'last_name' => $response_data['last_name'] ?? '',
+                'dob' => $dob,
+                'gender' => strtoupper($response_data['gender'] ?? 'N/A'),
+                'phone' => $from,
+                'identification_document' => strtolower($response_data['identification_document'] ?? 'national_id'),
+                'identification_number' => $response_data['identification_number'] ?? '',
+                'parent_id' => $parent_id,
+            ];
+
+            Log::info('Guardian creation payload', $payload);
+
+            // Call the /guardians/add endpoint
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'Authorization' => "Bearer {$accessToken}",
+            ])->post("{$terragosApiUrl}/api/guardians/add", $payload);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $guardianName = trim("{$payload['first_name']} {$payload['last_name']}");
+
+                Log::info('Guardian added successfully', [
+                    'guardian_id' => $data['data']['id'] ?? null,
+                    'name' => $guardianName,
+                ]);
+
+                $message = "✅ Guardian Added Successfully!\n\n";
+                $message .= "Name: {$guardianName}\n";
+                $message .= 'The guardian has been added to your account.';
+
+                $this->sendTextMessage($from, $message);
+            } else {
+                Log::error('Failed to add guardian', [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                $this->sendTextMessage($from, 'Sorry, there was an issue adding the guardian. Please try again or contact support.');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception handling guardian flow response', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $this->sendTextMessage($from, 'Sorry, an error occurred while adding the guardian. Please try again.');
+        }
+    }
+
+    /**
+     * Handle Dependant flow response
+     *
+     * @param  array  $response_data  Flow response data
+     * @param  string  $from  Phone number of the user
+     * @return void
+     */
+    private function handleDependantFlowResponse($response_data, $from)
+    {
+        Log::info('Handling Dependant Flow Response', ['data' => $response_data]);
+
+        try {
+            // Get the current user to extract parent_id
+            $userCheck = $this->getTerragoUserByPhone($from);
+
+            if (! $userCheck['found']) {
+                Log::error('User not found for dependant flow', ['phone' => $from]);
+                $this->sendTextMessage($from, 'Sorry, we couldn\'t find your account. Please contact support.');
+
+                return;
+            }
+
+            $user = $userCheck['data'];
+            $parent_id = $user['id'];
+
+            // Get access token
+            $tokenData = $this->getTerragoAccessToken();
+
+            if (! $tokenData) {
+                Log::error('Failed to get access token for dependant creation');
+                $this->sendTextMessage($from, 'Sorry, there was an issue connecting to our system. Please try again.');
+
+                return;
+            }
+
+            $accessToken = $tokenData['access_token'];
+            $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
+
+            // Format the date from YYYY-MM-DD to DD-MM-YYYY
+            $dob = $response_data['child_dob'] ?? null;
+            if ($dob) {
+                $dob = \Carbon\Carbon::parse($dob)->format('d-m-Y');
+            }
+
+            // Transform flow data to API format
+            $payload = [
+                'first_name' => $response_data['child_first_name'] ?? '',
+                'middle_name' => $response_data['child_middle_name'] ?? '',
+                'last_name' => $response_data['child_last_name'] ?? '',
+                'dob' => $dob,
+                'gender' => strtoupper($response_data['child_gender'] ?? 'N/A'),
+                'parent_id' => $parent_id,
+            ];
+
+            Log::info('Dependant creation payload', $payload);
+
+            // Call the /dependants/add endpoint
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'Authorization' => "Bearer {$accessToken}",
+            ])->post("{$terragosApiUrl}/api/dependants/add", $payload);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                $childName = trim("{$payload['first_name']} {$payload['last_name']}");
+
+                Log::info('Dependant added successfully', [
+                    'dependant_id' => $data['data']['id'] ?? null,
+                    'name' => $childName,
+                ]);
+
+                $message = "✅ Child Added Successfully!\n\n";
+                $message .= "Name: {$childName}\n";
+                $message .= 'The child has been added to your account.';
+
+                $this->sendTextMessage($from, $message);
+            } else {
+                Log::error('Failed to add dependant', [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                $this->sendTextMessage($from, 'Sorry, there was an issue adding the child. Please try again or contact support.');
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception handling dependant flow response', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            $this->sendTextMessage($from, 'Sorry, an error occurred while adding the child. Please try again.');
         }
     }
 
