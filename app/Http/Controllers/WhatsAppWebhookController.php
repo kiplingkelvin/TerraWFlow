@@ -203,12 +203,14 @@ class WhatsAppWebhookController extends Controller
     private function handleTextMessage($messages, $user)
     {
         $from = $messages['from'];
+        $parent_id = $user['id'];
         $userName = $user['first_name'];
         $textBody = $messages['text']['body'];
 
         switch ($textBody) {
             case '1':
-                $activities = $this->getDependentActivities($parent_id, $dependant_id);
+                $dependants = $this->getDependantsTiedToParent($parent_id);
+                $activities = $this->getDependentActivities($parent_id, $dependants[0]['id']);
                 // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
                 $latestActivity = $this->getLatestActivity($activities);
                 $message = $this->formatSingleActivityMessage($latestActivity);
@@ -216,7 +218,8 @@ class WhatsAppWebhookController extends Controller
                 break;
 
             case '2':
-                $activities = $this->getDependentActivities($parent_id, $dependant_id);
+                $dependants = $this->getDependantsTiedToParent($parent_id);
+                $activities = $this->getDependentActivities($parent_id, $dependants[0]['id']);
                 // $activities = $this->getDependentActivities('2f41e784-9fe4-4bb3-9cae-c2592d8d0d6c', '7dbdb6cc-6f7f-4cf9-884b-6b1032db8895');
                 $message = $this->formatActivitiesMessage($activities);
                 $this->sendTextMessage($from, $message);
@@ -862,7 +865,7 @@ class WhatsAppWebhookController extends Controller
 
     public function getDependentActivities($parent_id, $dependant_id)
     {
-        Log::info('Getting Terrago Dependant Activities');
+        Log::info('Getting Terrago Dependant Activities', ['dependant_id' => $dependant_id, 'parent_id' => $parent_id]);
 
         try {
 
@@ -960,6 +963,56 @@ class WhatsAppWebhookController extends Controller
 
         } catch (\Exception $e) {
             Log::error('Exception getting parent guardians', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return null;
+        }
+    }
+
+    public function getDependantsTiedToParent($parent_id)
+    {
+        Log::info('Getting Terrago dependants');
+
+        try {
+
+            $tokenData = $this->getTerragoAccessToken();
+
+            if (! $tokenData) {
+                Log::error('Failed to get access token');
+
+                return null;
+            }
+
+            $accessToken = $tokenData['access_token'];
+
+            $terragosApiUrl = config('terrago.api_url', 'https://terragostg.terrasofthq.com');
+
+            $response = Http::withHeaders([
+                'Accept' => 'application/json',
+                'Authorization' => "Bearer {$accessToken}",
+            ])->get("{$terragosApiUrl}/api/dependants?parent_id={$parent_id}");
+
+            if ($response->successful()) {
+                $data = $response->json();
+
+                Log::info('Parent dependants retrieved successfully', [
+                    'total_dependants' => count($data['data'] ?? []),
+                ]);
+
+                return $data['data'];
+            } else {
+                Log::error('Failed to get parent dependants', [
+                    'status' => $response->status(),
+                    'response' => $response->json(),
+                ]);
+
+                return null;
+            }
+
+        } catch (\Exception $e) {
+            Log::error('Exception getting parent dependants', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);
